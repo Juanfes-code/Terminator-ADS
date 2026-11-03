@@ -1,19 +1,53 @@
 ﻿import { Suspense } from 'react';
+import Link from 'next/link';
 import { supabaseServer } from '@/lib/supabaseServer';
 
-async function DashboardData() {
+type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
+
+// `mes` llega de Supabase como 'YYYY-MM-DD' (primer día del mes).
+function etiquetaMes(mes: string) {
+  const [anio, m] = mes.split('-').map(Number);
+  const texto = new Date(Date.UTC(anio, m - 1, 1)).toLocaleDateString('es-CO', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
+function ErrorSupabase({ mensaje }: { mensaje: string }) {
+  return (
+    <div className="p-8 text-red-600 font-mono">
+      Error al consultar Supabase: {mensaje}
+    </div>
+  );
+}
+
+async function DashboardData({ searchParams }: { searchParams: SearchParams }) {
+  const { data: filasMeses, error: errorMeses } = await supabaseServer
+    .from('v_mes_cuenta')
+    .select('mes')
+    .order('mes', { ascending: false });
+
+  if (errorMeses) return <ErrorSupabase mensaje={errorMeses.message} />;
+
+  const meses = [...new Set((filasMeses ?? []).map((f) => String(f.mes)))];
+  if (meses.length === 0) {
+    return <div className="p-8 text-center text-slate-500">No hay datos en v_mes_cuenta.</div>;
+  }
+
+  // ?mes=2026-10 selecciona un mes; por defecto, el más reciente.
+  const { mes: mesParam } = await searchParams;
+  const pedido = typeof mesParam === 'string' ? mesParam.slice(0, 7) : undefined;
+  const mesSeleccionado = meses.find((m) => m.slice(0, 7) === pedido) ?? meses[0];
+
   const { data: cuentas, error } = await supabaseServer
     .from('v_mes_cuenta')
     .select('*')
+    .eq('mes', mesSeleccionado)
     .order('inversion', { ascending: false });
 
-  if (error) {
-    return (
-      <div className="p-8 text-red-600 font-mono">
-        Error al consultar Supabase: {error.message}
-      </div>
-    );
-  }
+  if (error) return <ErrorSupabase mensaje={error.message} />;
 
   const inversionTotal = cuentas?.reduce((acc, c) => acc + Number(c.inversion || 0), 0) || 0;
   const registrosTotales = cuentas?.reduce((acc, c) => acc + Number(c.registros_completados || 0), 0) || 0;
@@ -50,9 +84,23 @@ async function DashboardData() {
       <section className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
           <h2 className="text-base font-semibold text-slate-900">Desempeño por Cuenta y Vertical</h2>
-          <span className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-medium">
-            Octubre 2026
-          </span>
+          <nav className="flex flex-wrap gap-2" aria-label="Seleccionar mes">
+            {meses.map((m) => {
+              const activo = m === mesSeleccionado;
+              return (
+                <Link
+                  key={m}
+                  href={`/?mes=${m.slice(0, 7)}`}
+                  aria-current={activo ? 'page' : undefined}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium transition-colors ${
+                    activo ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {etiquetaMes(m)}
+                </Link>
+              );
+            })}
+          </nav>
         </div>
 
         <div className="overflow-x-auto">
@@ -71,7 +119,7 @@ async function DashboardData() {
             </thead>
             <tbody className="divide-y divide-slate-100 font-mono text-xs">
               {cuentas?.map((row) => (
-                <tr key={row.account_id} className="hover:bg-slate-50/80 transition-colors">
+                <tr key={`${row.account_id}-${row.mes}`} className="hover:bg-slate-50/80 transition-colors">
                   <td className="py-3 px-4 font-sans font-medium text-slate-900 text-sm">{row.cliente}</td>
                   <td className="py-3 px-4 font-sans">
                     <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
@@ -108,12 +156,12 @@ async function DashboardData() {
   );
 }
 
-export default function DashboardPage() {
+export default function DashboardPage({ searchParams }: { searchParams: SearchParams }) {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-800 p-8">
       <div className="max-w-7xl mx-auto">
         <Suspense fallback={<div className="p-8 text-center text-slate-500 font-sans">Cargando métricas desde Supabase...</div>}>
-          <DashboardData />
+          <DashboardData searchParams={searchParams} />
         </Suspense>
       </div>
     </main>
